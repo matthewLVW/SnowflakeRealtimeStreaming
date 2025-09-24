@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  zookeeper:
+    image: bitnami/zookeeper:3
+    container_name: zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    restart: unless-stopped
+
+  kafka:
+    image: bitnami/kafka:3
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"  # external listener for host clients
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,PLAINTEXT_INTERNAL://:29092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT_INTERNAL
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=false
+      - KAFKA_CFG_LOG_RETENTION_MINUTES=60
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      # Retain topics for just one hour to keep raw tick volume low
+    restart: unless-stopped
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
+    restart: unless-stopped
+
+# Usage:
+# - Start: docker compose -f docker/compose.yml up -d
+# - Visit UI: http://localhost:8080
+# - Create topic (inside container):
+#   docker compose exec kafka kafka-topics.sh --bootstrap-server kafka:29092 --create --topic ticks.raw --partitions 1 --replication-factor 1
+# - Consume (inside container):
+#   docker compose exec kafka kafka-console-consumer.sh --bootstrap-server kafka:29092 --topic ticks.raw --from-beginning --max-messages 1
+

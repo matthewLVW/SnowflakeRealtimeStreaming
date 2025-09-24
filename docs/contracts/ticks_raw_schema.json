@@ -1,0 +1,82 @@
+﻿{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ticks.raw bin",
+  "description": "10 ms tick aggregation bin produced by the replay producer",
+  "type": "object",
+  "required": [
+    "bin_id",
+    "symbol",
+    "start_ts_ms",
+    "end_ts_ms",
+    "window_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "notional",
+    "trade_count",
+    "ingest_ts_ms"
+  ],
+  "properties": {
+    "bin_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9_.-]+-[0-9]{13}$",
+      "description": "Deterministic id = <symbol>-<bin_start_epoch_ms> for idempotent writes"
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ticker symbol for the bin"
+    },
+    "start_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Inclusive start of the 10 ms window (epoch milliseconds)"
+    },
+    "end_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Exclusive end of the 10 ms window (epoch milliseconds)"
+    },
+    "window_ms": {
+      "type": "integer",
+      "const": 10,
+      "description": "Window length used to create the bin"
+    },
+    "open": {"type": "number", "description": "First trade price in the window"},
+    "high": {"type": "number", "description": "Maximum trade price in the window"},
+    "low": {"type": "number", "description": "Minimum trade price in the window"},
+    "close": {"type": "number", "description": "Last trade price in the window"},
+    "volume": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Executed size aggregated across trades in the window"
+    },
+    "notional": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Sum(price * size) used for VWAP calculations"
+    },
+    "trade_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of ticks folded into the bin"
+    },
+    "max_lateness_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Observed lateness vs watermark in milliseconds for the bin"
+    },
+    "ingest_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Producer ingestion timestamp (epoch milliseconds)"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["replay"],
+      "description": "Identifier for the producing component"
+    }
+  }
+}

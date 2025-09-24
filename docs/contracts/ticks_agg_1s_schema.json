@@ -1,0 +1,81 @@
+﻿{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ticks.agg.1s bar",
+  "description": "1 second OHLCV bar derived from 10 ms bins",
+  "type": "object",
+  "required": [
+    "bar_id",
+    "symbol",
+    "start_ts_ms",
+    "end_ts_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "notional",
+    "vwap",
+    "bin_count",
+    "ingest_ts_ms"
+  ],
+  "properties": {
+    "bar_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9_.-]+-[0-9]{13}$",
+      "description": "Deterministic id = <symbol>-<bar_start_epoch_ms>"
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ticker symbol"
+    },
+    "start_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Inclusive start of the 1 second window (epoch ms)"
+    },
+    "end_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Exclusive end of the 1 second window (epoch ms)"
+    },
+    "open": {"type": "number", "description": "First price in the second"},
+    "high": {"type": "number", "description": "Highest price in the second"},
+    "low": {"type": "number", "description": "Lowest price in the second"},
+    "close": {"type": "number", "description": "Last price in the second"},
+    "volume": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total executed size"
+    },
+    "notional": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Sum of price * size across the second"
+    },
+    "vwap": {
+      "type": "number",
+      "description": "Volume weighted average price = notional / volume"
+    },
+    "bin_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of 10 ms bins contributing"
+    },
+    "max_lateness_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Largest lateness observed across contributing bins"
+    },
+    "ingest_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Aggregation emission time (epoch ms)"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["aggregator"],
+      "description": "Component emitting the 1 s bar"
+    }
+  }
+}

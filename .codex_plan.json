@@ -1,0 +1,1 @@
+{"steps": ["Add in-memory cache consumer for ticks.agg.1s", "Build Streamlit dashboard for OHLCV chart and metrics", "Document SLAs and validation workflow", "Provide instructions for smoke test and screenshot capture"]}
