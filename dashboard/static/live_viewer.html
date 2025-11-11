@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Tick Stream Viewer</title>
+    <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: #111c33;
+        --accent: #38bdf8;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --danger: #f87171;
+        --success: #34d399;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        padding: 1.25rem 2rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 1rem;
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 1.8rem;
+        font-weight: 600;
+      }
+
+      header .status {
+        margin-left: auto;
+        font-size: 0.95rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      header .status span {
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+      }
+
+      main {
+        flex: 1;
+        width: 100%;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1.5rem 2rem 3rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+
+      #chart {
+        width: 100%;
+        min-height: 360px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        border-radius: 12px;
+        padding: 0.75rem;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1rem;
+      }
+
+      .stat-card {
+        background: rgba(17, 28, 51, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 12px;
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+
+      .stat-card span.label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+
+      .stat-card strong {
+        font-size: 1.4rem;
+        font-weight: 600;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: rgba(17, 28, 51, 0.55);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      thead {
+        background: rgba(15, 23, 42, 0.75);
+      }
+
+      th, td {
+        padding: 0.65rem 0.85rem;
+        text-align: left;
+        font-size: 0.85rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      }
+
+      tbody tr:hover {
+        background: rgba(56, 189, 248, 0.08);
+      }
+
+      tbody tr:nth-child(even) {
+        background: rgba(15, 23, 42, 0.3);
+      }
+
+      @media (max-width: 768px) {
+        header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        header .status {
+          margin-left: 0;
+        }
+        main {
+          padding: 1.25rem;
+        }
+        th, td {
+          font-size: 0.75rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Live Tick Stream Viewer</h1>
+      <div class="status">
+        <span id="connection-status">Connecting…</span>
+        <span id="upstream-label"></span>
+      </div>
+    </header>
+    <main>
+      <section id="chart"></section>
+
+      <section class="stats">
+        <div class="stat-card">
+          <span class="label">Ticks received</span>
+          <strong id="tick-count">0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="label">Last symbol</span>
+          <strong id="last-symbol">–</strong>
+        </div>
+        <div class="stat-card">
+          <span class="label">Last price</span>
+          <strong id="last-price">–</strong>
+        </div>
+        <div class="stat-card">
+          <span class="label">Last event time</span>
+          <strong id="last-time">–</strong>
+        </div>
+      </section>
+
+      <section>
+        <table id="tick-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Price</th>
+              <th>Bid</th>
+              <th>Ask</th>
+              <th>Size</th>
+              <th>Event Time</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        const statusEl = document.getElementById("connection-status");
+        const upstreamEl = document.getElementById("upstream-label");
+        const countEl = document.getElementById("tick-count");
+        const lastSymbolEl = document.getElementById("last-symbol");
+        const lastPriceEl = document.getElementById("last-price");
+        const lastTimeEl = document.getElementById("last-time");
+        const tableBody = document.querySelector("#tick-table tbody");
+        const maxRows = 120;
+        const maxPoints = 500;
+        let tickCount = 0;
+
+        const chart = document.getElementById("chart");
+        Plotly.newPlot(
+          chart,
+          [
+            {
+              x: [],
+              y: [],
+              mode: "lines",
+              name: "px",
+              line: { color: "#38bdf8", width: 2 }
+            },
+            {
+              x: [],
+              y: [],
+              mode: "lines",
+              name: "bid",
+              line: { color: "#f97316", width: 1.5, dash: "dot" }
+            },
+            {
+              x: [],
+              y: [],
+              mode: "lines",
+              name: "ask",
+              line: { color: "#a855f7", width: 1.5, dash: "dot" }
+            }
+          ],
+          {
+            plot_bgcolor: "rgba(15, 23, 42, 0.6)",
+            paper_bgcolor: "rgba(0,0,0,0)",
+            margin: { l: 50, r: 30, t: 10, b: 40 },
+            showlegend: true,
+            legend: { orientation: "h", x: 0, y: 1.1 },
+            xaxis: {
+              title: "Event time",
+              color: "#94a3b8",
+              gridcolor: "rgba(148, 163, 184, 0.12)",
+              autorange: true,
+              type: "date"
+            },
+            yaxis: {
+              title: "Price",
+              color: "#94a3b8",
+              gridcolor: "rgba(148, 163, 184, 0.12)",
+              autorange: true
+            }
+          },
+          { responsive: true }
+        );
+
+        function toNumber(value) {
+          const num = Number(value);
+          return Number.isFinite(num) ? num : null;
+        }
+
+        function extractTimestamp(tick) {
+          if (typeof tick.event_ts_ms === "number") {
+            return tick.event_ts_ms;
+          }
+          if (typeof tick.event_ts === "number") {
+            return tick.event_ts * 1000;
+          }
+          if (typeof tick.api_send_ts_ms === "number") {
+            return tick.api_send_ts_ms;
+          }
+          return Date.now();
+        }
+
+        function formatTime(ms) {
+          const date = new Date(ms);
+          return date.toLocaleTimeString(undefined, {
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            fractionalSecondDigits: 3
+          });
+        }
+
+        function updateStats(tick, timestampMs) {
+          tickCount += 1;
+          countEl.textContent = tickCount.toString();
+          lastSymbolEl.textContent = tick.symbol || "–";
+          const px = toNumber(tick.px);
+          lastPriceEl.textContent = px !== null ? px.toFixed(4) : "–";
+          lastTimeEl.textContent = formatTime(timestampMs);
+        }
+
+        function updateChart(tick, timestampMs) {
+          const tsDate = new Date(timestampMs);
+          const px = toNumber(tick.px);
+          const bid = toNumber(tick.bid);
+          const ask = toNumber(tick.ask);
+          Plotly.extendTraces(
+            chart,
+            {
+              x: [[tsDate], [tsDate], [tsDate]],
+              y: [[px], [bid], [ask]]
+            },
+            [0, 1, 2],
+            maxPoints
+          );
+        }
+
+        function updateTable(tick, timestampMs) {
+          const row = document.createElement("tr");
+          const px = toNumber(tick.px);
+          const bid = toNumber(tick.bid);
+          const ask = toNumber(tick.ask);
+          const size = toNumber(tick.sz ?? tick.size);
+          row.innerHTML = `
+            <td>${tick.symbol ?? "–"}</td>
+            <td>${px !== null ? px.toFixed(4) : "–"}</td>
+            <td>${bid !== null ? bid.toFixed(4) : "–"}</td>
+            <td>${ask !== null ? ask.toFixed(4) : "–"}</td>
+            <td>${size !== null ? size.toFixed(2) : "–"}</td>
+            <td>${formatTime(timestampMs)}</td>
+            <td>${tick.source ?? "mock_api"}</td>
+          `;
+          tableBody.prepend(row);
+          while (tableBody.rows.length > maxRows) {
+            tableBody.deleteRow(tableBody.rows.length - 1);
+          }
+        }
+
+        async function fetchHealth() {
+          try {
+            const response = await fetch("/health");
+            if (!response.ok) {
+              return;
+            }
+            const data = await response.json();
+            upstreamEl.textContent = data.upstream_url ?? "";
+          } catch (err) {
+            upstreamEl.textContent = "";
+          }
+        }
+
+        function setStatus(state, message) {
+          statusEl.textContent = message;
+          if (state === "ok") {
+            statusEl.style.color = "var(--success)";
+          } else if (state === "warn") {
+            statusEl.style.color = "var(--accent)";
+          } else {
+            statusEl.style.color = "var(--danger)";
+          }
+        }
+
+        function connect() {
+          const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+          const ws = new WebSocket(`${protocol}://${window.location.host}/ws/ticks`);
+          setStatus("warn", "Connecting…");
+
+          ws.onopen = () => {
+            setStatus("ok", "Streaming");
+            fetchHealth();
+          };
+
+          ws.onmessage = (event) => {
+            try {
+              const tick = JSON.parse(event.data);
+              const tsMs = extractTimestamp(tick);
+              updateStats(tick, tsMs);
+              updateChart(tick, tsMs);
+              updateTable(tick, tsMs);
+            } catch (err) {
+              console.error("Failed to process tick", err);
+            }
+          };
+
+          ws.onclose = () => {
+            setStatus("warn", "Disconnected — retrying…");
+            setTimeout(connect, 2000);
+          };
+
+          ws.onerror = (err) => {
+            console.error("WebSocket error", err);
+            ws.close();
+          };
+        }
+
+        connect();
+      })();
+    </script>
+  </body>
+</html>

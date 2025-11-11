@@ -29,7 +29,7 @@
 ## Serving Path & Dashboard
 - **Cache**: `dashboard/cache.py` runs a dedicated Kafka consumer (`ticks.agg.1s`) that retains the latest 600 bars per symbol with latency snapshots.
 - **UI**: Streamlit app (`dashboard/app.py`) renders candlesticks, latency/backlog badges, and latest bar details with an in-session auto-refresh toggle (default 1 s cadence).
-- **Metrics**: End-to-end latency uses `ingest_ts_ms - end_ts_ms`, Kafka log lag uses consumer receive vs. broker timestamp, and freshness reflects dashboard staleness.
+- **Metrics**: End-to-end latency uses dashboard receive time minus `api_send_ts_ms`, Kafka log lag uses consumer receive vs. broker timestamp, and freshness reflects dashboard staleness.
 
 ## Snowflake Warehouse Layout
 - **RAW**: `RAW_STAGE` (GZIP NDJSON) and `RAW.TICKS_RAW` for provenance loads from the replay producer (hourly `COPY` batches).
@@ -39,7 +39,7 @@
 
 ## SLAs
 - **Producer publish**: <20 ms from raw tick ingest to Kafka append (monitored via Kafka timestamps).
-- **Processor latency**: <750 ms from bar end time to aggregator emit (`ingest_ts_ms`).
+- **Processor latency**: <750 ms from bar end time to aggregator emit (`ingest_ts_ms` still tracks internal processing latency).
 - **Dashboard freshness**: Auto-refresh every 1 s (toggleable) with backlog badge to ensure <1 s data staleness.
 - **Snowflake micro-batch**: 5-minute flush within 30 s of window close; warehouse compute <60 seconds/hour on XS.
 

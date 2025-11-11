@@ -10,6 +10,17 @@ from typing import Deque, Dict, List, Optional
 from kafka import KafkaConsumer  # type: ignore
 
 
+def _coerce_int_ms(value: object) -> Optional[int]:
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
 @dataclass
 class CacheConfig:
     """Runtime configuration for the in-memory cache consumer."""
@@ -46,14 +57,16 @@ class BarCache:
             lambda: deque(maxlen=max_per_symbol)
         )
         self._lock = threading.Lock()
-        self._latencies = deque(maxlen=metrics_window)
-        self._freshness = deque(maxlen=metrics_window)
-        self._log_lag = deque(maxlen=metrics_window)
-        self._last_latency_ms = 0.0
-        self._last_freshness_ms = 0.0
-        self._last_log_lag_ms = 0.0
+        self._api_gaps = deque(maxlen=metrics_window)
+        self._producer_gaps = deque(maxlen=metrics_window)
+        self._kafka_gaps = deque(maxlen=metrics_window)
+        self._last_api_gap_ms: Optional[float] = None
+        self._last_producer_gap_ms = 0.0
+        self._last_kafka_gap_ms = 0.0
         self._latest_end_ts_ms = 0
         self._latest_ingest_ts_ms = 0
+        self._latest_api_send_ts_ms = 0
+        self._latest_source_event_ts_ms = 0
         self._last_update_ts_ms = 0
         self._errors: Deque[str] = deque(maxlen=20)
 
@@ -67,6 +80,8 @@ class BarCache:
         start_ts_ms = int(bar.get("start_ts_ms", 0))
         end_ts_ms = int(bar.get("end_ts_ms", start_ts_ms + 1000))
         ingest_ts_ms = int(bar.get("ingest_ts_ms", received_ts_ms))
+        api_send_ts_ms = _coerce_int_ms(bar.get("api_send_ts_ms"))
+        source_event_ts_ms = _coerce_int_ms(bar.get("source_event_ts_ms"))
         payload = {
             "bar_id": bar.get("bar_id"),
             "symbol": symbol,
@@ -82,28 +97,37 @@ class BarCache:
             "bin_count": int(bar.get("bin_count", 0)),
             "max_lateness_ms": int(bar.get("max_lateness_ms", 0)),
             "ingest_ts_ms": ingest_ts_ms,
+            "api_send_ts_ms": api_send_ts_ms,
+            "source_event_ts_ms": source_event_ts_ms,
             "source": bar.get("source", "aggregator"),
         }
 
-        latency_ms = max(ingest_ts_ms - end_ts_ms, 0)
-        freshness_ms = max(received_ts_ms - end_ts_ms, 0)
-        log_lag_ms = (
-            max(received_ts_ms - record_timestamp_ms, 0)
-            if record_timestamp_ms is not None
-            else 0
-        )
+        api_gap_ms = None if api_send_ts_ms is None else max(received_ts_ms - api_send_ts_ms, 0)
+        producer_gap_ms = max(received_ts_ms - ingest_ts_ms, 0)
+        kafka_gap_ms = None
+        if record_timestamp_ms is not None:
+            kafka_gap_ms = max(received_ts_ms - record_timestamp_ms, 0)
 
         with self._lock:
             self._bars[symbol].append(payload)
-            self._latencies.append(latency_ms)
-            self._freshness.append(freshness_ms)
-            if record_timestamp_ms is not None:
-                self._log_lag.append(log_lag_ms)
-                self._last_log_lag_ms = float(log_lag_ms)
-            self._last_latency_ms = float(latency_ms)
-            self._last_freshness_ms = float(freshness_ms)
+            if api_gap_ms is not None:
+                self._api_gaps.append(api_gap_ms)
+                self._last_api_gap_ms = float(api_gap_ms)
+            else:
+                self._last_api_gap_ms = None
+            self._producer_gaps.append(producer_gap_ms)
+            self._last_producer_gap_ms = float(producer_gap_ms)
+            if kafka_gap_ms is not None:
+                self._kafka_gaps.append(kafka_gap_ms)
+                self._last_kafka_gap_ms = float(kafka_gap_ms)
+            else:
+                self._last_kafka_gap_ms = 0.0
             self._latest_end_ts_ms = max(self._latest_end_ts_ms, end_ts_ms)
             self._latest_ingest_ts_ms = max(self._latest_ingest_ts_ms, ingest_ts_ms)
+            if api_send_ts_ms is not None:
+                self._latest_api_send_ts_ms = max(self._latest_api_send_ts_ms, api_send_ts_ms)
+            if source_event_ts_ms is not None:
+                self._latest_source_event_ts_ms = max(self._latest_source_event_ts_ms, source_event_ts_ms)
             self._last_update_ts_ms = received_ts_ms
 
     def record_error(self, message: str) -> None:
@@ -117,21 +141,21 @@ class BarCache:
                 return {symbol: list(self._bars.get(symbol, []))}
             return {key: list(deque_items) for key, deque_items in self._bars.items()}
 
-    def metrics(self) -> Dict[str, float]:
+    def metrics(self) -> Dict[str, object]:
         now_ms = int(time.time() * 1000)
         with self._lock:
-            avg_latency = sum(self._latencies) / len(self._latencies) if self._latencies else 0.0
-            avg_freshness = sum(self._freshness) / len(self._freshness) if self._freshness else 0.0
-            avg_log_lag = sum(self._log_lag) / len(self._log_lag) if self._log_lag else 0.0
+            avg_api_gap = sum(self._api_gaps) / len(self._api_gaps) if self._api_gaps else 0.0
+            avg_producer_gap = sum(self._producer_gaps) / len(self._producer_gaps) if self._producer_gaps else 0.0
+            avg_kafka_gap = sum(self._kafka_gaps) / len(self._kafka_gaps) if self._kafka_gaps else 0.0
             backlog_ms = max(now_ms - self._latest_end_ts_ms, 0)
             bars_cached = sum(len(items) for items in self._bars.values())
             return {
-                "last_latency_ms": self._last_latency_ms,
-                "avg_latency_ms": float(avg_latency),
-                "last_freshness_ms": self._last_freshness_ms,
-                "avg_freshness_ms": float(avg_freshness),
-                "last_log_lag_ms": self._last_log_lag_ms,
-                "avg_log_lag_ms": float(avg_log_lag),
+                "last_api_gap_ms": self._last_api_gap_ms,
+                "avg_api_gap_ms": float(avg_api_gap),
+                "last_producer_gap_ms": self._last_producer_gap_ms,
+                "avg_producer_gap_ms": float(avg_producer_gap),
+                "last_kafka_gap_ms": self._last_kafka_gap_ms,
+                "avg_kafka_gap_ms": float(avg_kafka_gap),
                 "backlog_ms": float(backlog_ms),
                 "bars_cached": float(bars_cached),
                 "last_update_ts_ms": float(self._last_update_ts_ms),

@@ -16,6 +16,7 @@
     "notional",
     "vwap",
     "bin_count",
+    "api_send_ts_ms",
     "ingest_ts_ms"
   ],
   "properties": {
@@ -66,6 +67,16 @@
       "type": "integer",
       "minimum": 0,
       "description": "Largest lateness observed across contributing bins"
+    },
+    "api_send_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Earliest API send timestamp observed across contributing bins (epoch ms)"
+    },
+    "source_event_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Earliest historical event timestamp (epoch ms) aggregated into the bar"
     },
     "ingest_ts_ms": {
       "type": "integer",

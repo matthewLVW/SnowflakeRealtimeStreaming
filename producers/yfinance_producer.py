@@ -35,6 +35,7 @@ def make_event(sym: str) -> Tuple[Dict[str, Any], yf.Ticker]:
     info = getattr(ticker, "fast_info", {}) or {}
 
     now = time.time()
+    send_ts_ms = int(now * 1000)
     size = (
         info.get("last_size")
         or info.get("bid_size")
@@ -50,7 +51,7 @@ def make_event(sym: str) -> Tuple[Dict[str, Any], yf.Ticker]:
         "sz": size,
         "event_ts": now,
         "source": "yfinance.fast_info",
-        "ingest_ts": now,
+        "api_send_ts_ms": send_ts_ms,
     }
     return event, ticker
 

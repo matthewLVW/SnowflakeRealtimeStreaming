@@ -53,15 +53,18 @@ def ensure_env(path: Path) -> None:
 
 
 def have_snowflake_config() -> bool:
-    required = [
+    required_base = [
         "SNOW_ACCOUNT",
         "SNOW_USER",
-        "SNOW_PASSWORD",
         "SNOW_WAREHOUSE",
         "SNOW_DATABASE",
         "SNOW_SCHEMA",
     ]
-    return all(os.environ.get(key) for key in required)
+    if not all(os.environ.get(key) for key in required_base):
+        return False
+    has_password = bool(os.environ.get("SNOW_PASSWORD"))
+    has_key = bool(os.environ.get("SNOW_PRIVATE_KEY_PATH") or os.environ.get("SNOW_PRIVATE_KEY_B64"))
+    return has_password or has_key
 
 
 def resolve_api_script(repo_root: Path, api_choice: str) -> Path:

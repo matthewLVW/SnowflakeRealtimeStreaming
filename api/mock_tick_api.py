@@ -88,8 +88,10 @@ def iter_events(config: Dict[str, object]) -> Iterator[TickEvent]:
                     "ask": parse_float(ask),
                     "sz": parse_float(size),
                     "event_ts": event_ts,
-                    "ingest_ts": time.time(),
+                    "api_send_ts_ms": int(time.time() * 1000),
                     "source": "mock_api",
+                    "source_event_ts": event_ts,
+                    "source_event_ts_ms": int(round(event_ts * 1000)),
                 }
         if not loop:
             break

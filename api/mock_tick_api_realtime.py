@@ -87,11 +87,12 @@ def iter_events(config: Dict[str, object]) -> Iterator[TickEvent]:
                     "ask": parse_float(ask),
                     "sz": parse_float(size),
                     "event_ts": event_ts_live,
-                    "ingest_ts": time.time(),
+                    "api_send_ts_ms": int(time.time() * 1000),
                     "source": "mock_api_realtime",
                 }
                 if include_source_ts:
                     payload["source_event_ts"] = event_ts_original
+                    payload["source_event_ts_ms"] = int(round(event_ts_original * 1000))
 
                 yield payload
         if not loop:
@@ -103,9 +104,10 @@ def build_config() -> Dict[str, object]:
     if not data_path.exists():
         raise FileNotFoundError(f"Tick file not found: {data_path}")
 
-    speed = float(os.environ.get("MOCK_STREAM_SPEED", "1.0"))
-    if speed <= 0:
-        raise ValueError("MOCK_STREAM_SPEED must be positive")
+    speed_env = os.environ.get("MOCK_STREAM_SPEED")
+    if speed_env is None:
+        speed_env = os.environ.get("REPLAY_SPEED")
+    speed = float(speed_env or "1.0")
 
     max_sleep = float(os.environ.get("MOCK_MAX_SLEEP", "1.0"))
 

@@ -56,14 +56,20 @@ Real-time pipeline that replays historical tick data, publishes 10 ms bins into 
 ## Dashboard and Monitoring
 - The Streamlit app (`dashboard/app.py`) consumes `ticks.agg.1s` through an in-memory cache (`dashboard/cache.py`).
 - Candlestick view renders 1 s OHLCV bars with a 60-900 s history window per symbol.
-- Sidebar badges display end-to-end latency (`ingest_ts_ms - end_ts_ms`), Kafka log lag (consumer receive time vs. broker timestamp), data freshness, cached bar count, and last update.
+- Sidebar badges display end-to-end latency (dashboard receive time minus `api_send_ts_ms`), Kafka log lag (consumer receive time vs. broker timestamp), data freshness, cached bar count, and last update.
 - Auto-refresh uses Streamlit's in-session rerun (toggleable in the sidebar); it avoids full page reloads so filters stay put.
 - Capture a proof screenshot by running a replay sample, opening the dashboard, and using your OS tooling once metrics settle below targets.
+
+## Live Tick Viewer (FastAPI + WebSockets)
+- Lightweight alternative to Streamlit for visualising the mock API in real time. Launch with `uvicorn dashboard.live_tick_server:app --reload --port 8502` (port optional).
+- Opens at `http://localhost:8502` and streams ticks directly to the browser over a WebSocket, updating Plotly traces and a live table without full page rerenders.
+- Defaults to the legacy mock API at `http://localhost:8000/ticks`; override with `VIEWER_UPSTREAM_URL=http://host:port/ticks uvicorn ...` to point at another feed.
+- Reconnects automatically if the upstream API or viewer is restarted, making it ideal for demos or lightweight monitoring when Streamlit is overkill.
 
 ## Snowflake Warehouse
 - Snowflake bootstrap DDL, stage/table definitions, and dimension seeding live in `snowflake/00_setup.sql`.
 - Apply it via SnowSQL (replace placeholders): `snowsql -a <account> -u <admin_user> -f snowflake/00_setup.sql`. The script creates `ROLE_STREAMING_PIPELINE`, `WH_STREAMING_XS`, RAW/CORE/MART schemas, and seeds `CORE.DIM_SYMBOL` + `CORE.DIM_CALENDAR` for the current year.
-- Configure credentials in `.env` (`SNOW_ACCOUNT`, `SNOW_USER`, `SNOW_PASSWORD`, `SNOW_WAREHOUSE`, `SNOW_DATABASE`, `SNOW_SCHEMA`).
+- Configure credentials in `.env` (`SNOW_ACCOUNT`, `SNOW_USER`, `SNOW_WAREHOUSE`, `SNOW_DATABASE`, `SNOW_SCHEMA`) and authenticate with either `SNOW_PASSWORD` or an RSA key (`SNOW_PRIVATE_KEY_PATH` or `SNOW_PRIVATE_KEY_B64` + `authenticator="SNOWFLAKE_JWT"` handled automatically by the loader).
 - Run `make snowflake-loader` to stream 5-row micro-batches every five minutes. Each batch inserts five 1-minute snapshots (open/high/low/close/volume) and a consolidated five-minute fact into `CORE.FACT_TICKS_60S` and `CORE.FACT_TICKS_300S`.
 - XS warehouse with auto-suspend keeps credit usage tiny; batches execute in seconds and the warehouse sleeps again.
 

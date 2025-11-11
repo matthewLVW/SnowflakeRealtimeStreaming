@@ -25,7 +25,6 @@ class ProducerConfig:
     bin_ms: int
     max_late_ms: int
     symbol: str
-    replay_speed: float
     log_path: Path
     dlt_path: Path
 
@@ -43,6 +42,8 @@ class BinState:
     notional: float
     trade_count: int
     max_lateness_ms: int = 0
+    api_send_ts_ms: Optional[int] = None
+    source_event_ts_ms: Optional[int] = None
 
     def to_payload(self, ingest_ts_ms: int) -> Dict[str, object]:
         bin_id = f"{self.symbol}-{self.start_ms:013d}"
@@ -60,6 +61,8 @@ class BinState:
             "notional": round(self.notional, 6),
             "trade_count": self.trade_count,
             "max_lateness_ms": self.max_lateness_ms,
+            "api_send_ts_ms": self.api_send_ts_ms,
+            "source_event_ts_ms": self.source_event_ts_ms,
             "ingest_ts_ms": ingest_ts_ms,
             "source": "replay",
         }
@@ -92,7 +95,6 @@ def load_config() -> ProducerConfig:
     if bin_ms <= 0:
         raise ValueError("REPLAY_BIN_MS must be positive")
     max_late_ms = int(os.environ.get("REPLAY_MAX_LATE_MS", "500"))
-    replay_speed = float(os.environ.get("REPLAY_SPEED", "0"))
     log_path = Path(os.environ.get("REPLAY_LOG", "logs/replay.jsonl"))
     dlt_path = Path(os.environ.get("REPLAY_DLT", "logs/replay_dlt.jsonl"))
     return ProducerConfig(
@@ -102,7 +104,6 @@ def load_config() -> ProducerConfig:
         bin_ms=bin_ms,
         max_late_ms=max_late_ms,
         symbol=symbol,
-        replay_speed=replay_speed,
         log_path=log_path,
         dlt_path=dlt_path,
     )
@@ -129,20 +130,102 @@ def epoch_ms(value: float) -> int:
     return int(round(value * 1000.0))
 
 
+def coerce_int_ms(value: object) -> Optional[int]:
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
+def extract_source_event_ts_ms(tick: Dict[str, object]) -> Optional[int]:
+    candidate = coerce_int_ms(tick.get("source_event_ts_ms"))
+    if candidate is not None:
+        return candidate
+    raw = tick.get("source_event_ts")
+    if raw is None:
+        return None
+    try:
+        return epoch_ms(float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
 def floor_bin(ts_ms: int, window_ms: int) -> int:
     return (ts_ms // window_ms) * window_ms
+
+
+def create_empty_bin_state(symbol: str, start_ms: int, window_ms: int, price: float) -> BinState:
+    """Construct a zero-volume bin anchored to the last observed price."""
+    price_f = float(price)
+    return BinState(
+        symbol=symbol,
+        start_ms=start_ms,
+        window_ms=window_ms,
+        open=price_f,
+        high=price_f,
+        low=price_f,
+        close=price_f,
+        volume=0.0,
+        notional=0.0,
+        trade_count=0,
+    )
+
+
+def flush_symbol_bins(
+    config: ProducerConfig,
+    symbol: str,
+    bins: Dict[int, BinState],
+    next_emit_start_ms: Dict[str, int],
+    last_close_price: Dict[str, float],
+    flush_threshold: int,
+    producer: Optional[KafkaProducer],
+) -> None:
+    if not bins and symbol not in next_emit_start_ms:
+        return
+    window_ms = config.bin_ms
+    if bins:
+        earliest_start = min(bins.keys())
+        current_start = next_emit_start_ms.get(symbol)
+        if current_start is None or earliest_start < current_start:
+            next_emit_start_ms[symbol] = earliest_start
+    next_start = next_emit_start_ms.get(symbol)
+    if next_start is None:
+        return
+
+    while next_start + window_ms <= flush_threshold:
+        state = bins.pop(next_start, None)
+        if state is None:
+            price = last_close_price.get(symbol)
+            if price is None:
+                next_start += window_ms
+                next_emit_start_ms[symbol] = next_start
+                continue
+            state = create_empty_bin_state(symbol, next_start, window_ms, price)
+        emit_ts_ms = epoch_ms(time.time())
+        payload = state.to_payload(emit_ts_ms)
+        emit_bin(config, producer, payload)
+        last_close_price[symbol] = state.close
+        next_start += window_ms
+        next_emit_start_ms[symbol] = next_start
 
 
 def process_stream(config: ProducerConfig, producer: Optional[KafkaProducer]) -> None:
     symbol_bins: Dict[str, Dict[int, BinState]] = defaultdict(dict)
     watermarks: Dict[str, int] = defaultdict(int)
-    last_emit_ts_ms: Dict[str, int] = defaultdict(int)
+    next_emit_start_ms: Dict[str, int] = {}
+    last_close_price: Dict[str, float] = {}
 
     for tick in stream_ticks(config.api_url):
         tick_symbol = str(tick.get("symbol") or config.symbol)
         price = tick.get("px")
         size = tick.get("sz")
         event_ts = tick.get("event_ts")
+        api_send_ts_ms = coerce_int_ms(tick.get("api_send_ts_ms"))
+        source_event_ts_ms = extract_source_event_ts_ms(tick)
         if price is None or event_ts is None:
             continue
         price_f = float(price)
@@ -182,6 +265,8 @@ def process_stream(config: ProducerConfig, producer: Optional[KafkaProducer]) ->
                 volume=size_f,
                 notional=price_f * size_f,
                 trade_count=1,
+                api_send_ts_ms=api_send_ts_ms,
+                source_event_ts_ms=source_event_ts_ms,
             )
             symbol_bins[tick_symbol][bin_start] = state
         else:
@@ -192,44 +277,44 @@ def process_stream(config: ProducerConfig, producer: Optional[KafkaProducer]) ->
             state.notional += price_f * size_f
             state.trade_count += 1
 
+        next_emit_start_ms.setdefault(tick_symbol, bin_start)
+
+        if api_send_ts_ms is not None:
+            if state.api_send_ts_ms is None or api_send_ts_ms < state.api_send_ts_ms:
+                state.api_send_ts_ms = api_send_ts_ms
+
+        if source_event_ts_ms is not None:
+            if state.source_event_ts_ms is None or source_event_ts_ms < state.source_event_ts_ms:
+                state.source_event_ts_ms = source_event_ts_ms
+
         if lateness > state.max_lateness_ms:
             state.max_lateness_ms = int(lateness)
 
         flush_threshold = watermarks[tick_symbol] - config.max_late_ms
-        ready_bins = [start for start, b in symbol_bins[tick_symbol].items() if b.start_ms + b.window_ms <= flush_threshold]
-        for bin_start_ms in sorted(ready_bins):
-            bin_state = symbol_bins[tick_symbol].pop(bin_start_ms)
-            emit_ts_ms = epoch_ms(time.time())
-            payload = bin_state.to_payload(emit_ts_ms)
-            maybe_sleep(config, last_emit_ts_ms, tick_symbol, bin_state.start_ms)
-            emit_bin(config, producer, payload)
+        flush_symbol_bins(
+            config=config,
+            symbol=tick_symbol,
+            bins=symbol_bins[tick_symbol],
+            next_emit_start_ms=next_emit_start_ms,
+            last_close_price=last_close_price,
+            flush_threshold=flush_threshold,
+            producer=producer,
+        )
 
     # Flush remaining bins on shutdown
     for tick_symbol, bins in symbol_bins.items():
-        for bin_state in sorted(bins.values(), key=lambda b: b.start_ms):
-            emit_ts_ms = epoch_ms(time.time())
-            payload = bin_state.to_payload(emit_ts_ms)
-            maybe_sleep(config, last_emit_ts_ms, tick_symbol, bin_state.start_ms)
-            emit_bin(config, producer, payload)
-
-
-def maybe_sleep(config: ProducerConfig, last_emit: Dict[str, int], symbol: str, current_start_ms: int) -> None:
-    speed = config.replay_speed
-    if speed <= 0:
-        last_emit[symbol] = current_start_ms
-        return
-    last = last_emit.get(symbol, 0)
-    if last == 0:
-        last_emit[symbol] = current_start_ms
-        return
-    delta_ms = current_start_ms - last
-    if delta_ms <= 0:
-        last_emit[symbol] = current_start_ms
-        return
-    sleep_for = (delta_ms / 1000.0) / speed
-    if sleep_for > 0:
-        time.sleep(sleep_for)
-    last_emit[symbol] = current_start_ms
+        if not bins:
+            continue
+        final_threshold = max(b.start_ms for b in bins.values()) + config.bin_ms
+        flush_symbol_bins(
+            config=config,
+            symbol=tick_symbol,
+            bins=bins,
+            next_emit_start_ms=next_emit_start_ms,
+            last_close_price=last_close_price,
+            flush_threshold=final_threshold,
+            producer=producer,
+        )
 
 
 def emit_bin(config: ProducerConfig, producer: Optional[KafkaProducer], payload: Dict[str, object]) -> None:

@@ -16,6 +16,7 @@
     "volume",
     "notional",
     "trade_count",
+    "api_send_ts_ms",
     "ingest_ts_ms"
   ],
   "properties": {
@@ -68,10 +69,20 @@
       "minimum": 0,
       "description": "Observed lateness vs watermark in milliseconds for the bin"
     },
+    "api_send_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Timestamp captured when the mock API emitted the source tick (epoch milliseconds)"
+    },
+    "source_event_ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Earliest historical event timestamp (epoch milliseconds) across ticks in the bin"
+    },
     "ingest_ts_ms": {
       "type": "integer",
       "minimum": 0,
-      "description": "Producer ingestion timestamp (epoch milliseconds)"
+      "description": "Replay producer emission timestamp (epoch milliseconds)"
     },
     "source": {
       "type": "string",

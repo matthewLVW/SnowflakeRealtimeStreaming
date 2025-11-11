@@ -61,6 +61,8 @@ class BarState:
     notional: float
     bin_count: int
     max_lateness_ms: int = 0
+    api_send_ts_ms: Optional[int] = None
+    source_event_ts_ms: Optional[int] = None
 
     def to_payload(self, ingest_ts_ms: int) -> Dict[str, object]:
         bar_id = f"{self.symbol}-{self.start_ms:013d}"
@@ -79,6 +81,8 @@ class BarState:
             "vwap": round(vwap, 6),
             "bin_count": self.bin_count,
             "max_lateness_ms": self.max_lateness_ms,
+            "api_send_ts_ms": self.api_send_ts_ms,
+            "source_event_ts_ms": self.source_event_ts_ms,
             "ingest_ts_ms": ingest_ts_ms,
             "source": "aggregator",
         }
@@ -114,6 +118,17 @@ def deserialize_value(blob: Optional[bytes]) -> Dict[str, object]:
     except json.JSONDecodeError as exc:
         print(f"[agg] skipping malformed payload: {exc}", file=sys.stderr)
         return {}
+
+
+def coerce_int_ms(value: object) -> Optional[int]:
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
 
 
 def init_producer(brokers: str) -> Optional[KafkaProducer]:
@@ -182,6 +197,8 @@ def process(
                     close_px = float(tick.get("close", open_px))
                     volume = float(tick.get("volume", 0))
                     notional = float(tick.get("notional", 0))
+                    api_send_ts_ms = coerce_int_ms(tick.get("api_send_ts_ms"))
+                    source_event_ts_ms = coerce_int_ms(tick.get("source_event_ts_ms"))
 
                     watermark = watermarks[symbol]
                     if end_ts > watermark:
@@ -219,6 +236,8 @@ def process(
                             volume=volume,
                             notional=notional,
                             bin_count=1,
+                            api_send_ts_ms=api_send_ts_ms,
+                            source_event_ts_ms=source_event_ts_ms,
                         )
                         bar_state[symbol][bar_start] = state
                     else:
@@ -228,6 +247,12 @@ def process(
                         state.volume += volume
                         state.notional += notional
                         state.bin_count += 1
+                    if api_send_ts_ms is not None:
+                        if state.api_send_ts_ms is None or api_send_ts_ms < state.api_send_ts_ms:
+                            state.api_send_ts_ms = api_send_ts_ms
+                    if source_event_ts_ms is not None:
+                        if state.source_event_ts_ms is None or source_event_ts_ms < state.source_event_ts_ms:
+                            state.source_event_ts_ms = source_event_ts_ms
                     if lateness > state.max_lateness_ms:
                         state.max_lateness_ms = int(lateness)
 

@@ -8,7 +8,7 @@ import shlex
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import pandas as pd  # type: ignore
 import plotly.graph_objects as go  # type: ignore
@@ -70,7 +70,9 @@ def get_cache() -> Tuple[BarCache, CacheConsumer]:
     return create_cache()
 
 
-def format_duration_ms(value_ms: float) -> str:
+def format_duration_ms(value_ms: Optional[float]) -> str:
+    if value_ms is None:
+        return "n/a"
     if value_ms >= 1000:
         return f"{value_ms / 1000.0:.2f} s"
     return f"{value_ms:.0f} ms"
@@ -124,7 +126,7 @@ def render_dashboard() -> None:
     cache, _consumer = get_cache()
     st.title("Real-time OHLCV Dashboard")
     st.caption(
-        "1 s aggregates from ticks.agg.1s with latency and backlog monitors (toggle auto-refresh to pause)."
+        "1 s aggregates from ticks.agg.1s with latency monitors and backlog stats (toggle auto-refresh to pause)."
     )
 
     symbols = cache.symbols()
@@ -155,26 +157,22 @@ def render_dashboard() -> None:
     metrics = cache.metrics()
     last_bar: Dict[str, object] = df.iloc[-1].to_dict()
 
-    latency_ms = metrics.get("last_latency_ms", 0.0)
-    freshness_ms = metrics.get("last_freshness_ms", 0.0)
-    log_lag_ms = metrics.get("last_log_lag_ms", 0.0)
+    raw_api_gap = metrics.get("last_api_gap_ms")
+    api_gap_ms = float(raw_api_gap) if isinstance(raw_api_gap, (int, float)) else None
+    producer_gap_ms = float(metrics.get("last_producer_gap_ms", 0.0))
+    kafka_gap_ms = float(metrics.get("last_kafka_gap_ms", 0.0))
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "End-to-end latency",
-        format_duration_ms(latency_ms),
-        delta=metrics.get("avg_latency_ms", 0.0) - latency_ms,
-    )
-    col2.metric(
-        "Data freshness",
-        format_duration_ms(freshness_ms),
-        delta=metrics.get("avg_freshness_ms", 0.0) - freshness_ms,
-    )
-    col3.metric(
-        "Kafka log lag",
-        format_duration_ms(log_lag_ms),
-        delta=metrics.get("avg_log_lag_ms", 0.0) - log_lag_ms,
-    )
+    real_df = df_filtered[df_filtered["volume"] > 0]
+    if len(real_df) > 1:
+        avg_real_gap_ms = float(real_df["start_ts_ms"].diff().dropna().mean())
+    else:
+        avg_real_gap_ms = 0.0
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("API -> Dashboard", format_duration_ms(api_gap_ms))
+    col2.metric("Producer -> Dashboard", format_duration_ms(producer_gap_ms))
+    col3.metric("Avg gap between real bars", format_duration_ms(avg_real_gap_ms))
+    col4.metric("Kafka -> Dashboard", format_duration_ms(kafka_gap_ms))
 
     st.plotly_chart(build_candlestick(df_filtered), use_container_width=True)
 
@@ -191,7 +189,13 @@ def render_dashboard() -> None:
                 "volume": last_bar.get("volume"),
                 "bin_count": last_bar.get("bin_count"),
                 "max_lateness_ms": last_bar.get("max_lateness_ms"),
-                "ingest_latency_ms": latency_ms,
+                "api_send_ts_ms": last_bar.get("api_send_ts_ms"),
+                "source_event_ts_ms": last_bar.get("source_event_ts_ms"),
+                "ingest_ts_ms": last_bar.get("ingest_ts_ms"),
+                "api_gap_ms": api_gap_ms,
+                "producer_gap_ms": producer_gap_ms,
+                "avg_real_bar_gap_ms": avg_real_gap_ms,
+                "kafka_gap_ms": kafka_gap_ms,
             }
         )
 
@@ -226,7 +230,7 @@ def render_dashboard() -> None:
     st.sidebar.metric("Last update", last_update)
 
     st.caption(
-        "SLA targets: producer publish <20 ms, processor <750 ms, dashboard refresh 1 s. Badges above should stay below thresholds."
+        "SLA targets: API -> dashboard <250 ms, producer -> dashboard <150 ms, Kafka -> dashboard <50 ms."
     )
 
     schedule_refresh(auto_refresh, refresh_ms)
@@ -234,3 +238,4 @@ def render_dashboard() -> None:
 
 if __name__ == "__main__":
     render_dashboard()
+

@@ -10,6 +10,7 @@ import os
 import shlex
 import sys
 import time
+import base64
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 from kafka import KafkaConsumer  # type: ignore
 from kafka.errors import KafkaError, NoBrokersAvailable  # type: ignore
 import snowflake.connector  # type: ignore
+from cryptography.hazmat.primitives import serialization
 
 LOGGER = logging.getLogger("snowflake-loader")
 
@@ -43,6 +45,26 @@ def parse_env_file(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def load_private_key(path: Optional[str], b64_value: Optional[str] = None):
+    key_bytes: Optional[bytes] = None
+    if b64_value:
+        try:
+            key_bytes = base64.b64decode(b64_value)
+        except (base64.binascii.Error, ValueError) as exc:
+            raise RuntimeError("Failed to decode SNOW_PRIVATE_KEY_B64") from exc
+    elif path:
+        key_path = Path(path).expanduser()
+        if not key_path.exists():
+            raise FileNotFoundError(f"Snowflake private key not found: {key_path}")
+        key_bytes = key_path.read_bytes()
+    if key_bytes is None:
+        return None
+    try:
+        return serialization.load_der_private_key(key_bytes, password=None)
+    except ValueError:
+        return serialization.load_pem_private_key(key_bytes, password=None)
+
+
 @dataclass
 class LoaderConfig:
     brokers: str
@@ -55,7 +77,9 @@ class LoaderConfig:
     five_minute_table: Optional[str]
     snow_account: str
     snow_user: str
-    snow_password: str
+    snow_password: Optional[str]
+    snow_private_key_path: Optional[str]
+    snow_private_key_b64: Optional[str]
     snow_role: Optional[str]
     snow_warehouse: str
     snow_database: str
@@ -260,11 +284,21 @@ class SnowflakeLoader:
         kwargs = {
             "account": self.config.snow_account,
             "user": self.config.snow_user,
-            "password": self.config.snow_password,
             "warehouse": self.config.snow_warehouse,
             "database": self.config.snow_database,
             "schema": self.config.snow_schema,
+            
         }
+        private_key = load_private_key(self.config.snow_private_key_path, self.config.snow_private_key_b64)
+        if private_key is not None:
+            kwargs["authenticator"] = "SNOWFLAKE_JWT"
+            kwargs["private_key"] = private_key
+        elif self.config.snow_password:
+            kwargs["password"] = self.config.snow_password
+        else:
+            raise RuntimeError(
+                "No Snowflake authentication secret available; configure SNOW_PASSWORD or private key variables."
+            )
         if self.config.snow_role:
             kwargs["role"] = self.config.snow_role
         self._connection = snowflake.connector.connect(**kwargs)
@@ -360,7 +394,6 @@ def load_config() -> LoaderConfig:
     required_env = {
         "SNOW_ACCOUNT": os.environ.get("SNOW_ACCOUNT"),
         "SNOW_USER": os.environ.get("SNOW_USER"),
-        "SNOW_PASSWORD": os.environ.get("SNOW_PASSWORD"),
         "SNOW_WAREHOUSE": os.environ.get("SNOW_WAREHOUSE"),
         "SNOW_DATABASE": os.environ.get("SNOW_DATABASE"),
         "SNOW_SCHEMA": os.environ.get("SNOW_SCHEMA"),
@@ -368,6 +401,15 @@ def load_config() -> LoaderConfig:
     missing = [key for key, value in required_env.items() if not value]
     if missing:
         raise RuntimeError(f"Missing Snowflake configuration variables: {', '.join(missing)}")
+
+    password = os.environ.get("SNOW_PASSWORD")
+    private_key_path = os.environ.get("SNOW_PRIVATE_KEY_PATH")
+    private_key_b64 = os.environ.get("SNOW_PRIVATE_KEY_B64")
+    if not password and not private_key_path and not private_key_b64:
+        raise RuntimeError(
+            "Missing Snowflake authentication secret. Provide SNOW_PASSWORD or "
+            "SNOW_PRIVATE_KEY_PATH / SNOW_PRIVATE_KEY_B64."
+        )
 
     return LoaderConfig(
         brokers=brokers,
@@ -380,7 +422,9 @@ def load_config() -> LoaderConfig:
         five_minute_table=five_minute_table,
         snow_account=required_env["SNOW_ACCOUNT"],
         snow_user=required_env["SNOW_USER"],
-        snow_password=required_env["SNOW_PASSWORD"],
+        snow_password=password,
+        snow_private_key_path=private_key_path,
+        snow_private_key_b64=private_key_b64,
         snow_role=os.environ.get("SNOW_ROLE"),
         snow_warehouse=required_env["SNOW_WAREHOUSE"],
         snow_database=required_env["SNOW_DATABASE"],
