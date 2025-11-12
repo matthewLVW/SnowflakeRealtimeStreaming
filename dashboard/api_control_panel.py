@@ -28,6 +28,47 @@ IS_WINDOWS = os.name == "nt"
 
 PAGE_STYLE = """
 <style>
+    .main .block-container {
+        max-width: 1200px;
+        padding-top: 1.5rem;
+    }
+    .stApp {
+        font-size: 1.23rem;
+        line-height: 1.75;
+    }
+    label[data-testid="stWidgetLabel"] {
+        font-size: 1.23rem;
+        font-weight: 600;
+        color: #f1f5f9;
+    }
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-baseweb="select"] > div,
+    div[data-testid="stTextArea"] textarea {
+        font-size: 1.23rem !important;
+        padding: 0.8rem 1.05rem;
+        border-radius: 11px;
+    }
+    div[data-testid="stCheckbox"] label {
+        font-size: 1.21rem;
+    }
+    div[data-testid^="stButton"] button,
+    div[data-testid="stDownloadButton"] button {
+        font-size: 1.41rem !important;
+        font-weight: 700 !important;
+        padding: 1.02rem 1.95rem !important;
+        border-radius: 12px !important;
+        box-shadow: 0 0 0 rgba(148, 187, 233, 0);
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    div[data-testid^="stButton"] button * {
+        font-size: 1.41rem !important;
+    }
+    div[data-testid^="stButton"] button:hover,
+    div[data-testid="stDownloadButton"] button:hover {
+        transform: scale(1.06);
+        box-shadow: 0 0 22px rgba(148, 187, 233, 0.6);
+    }
     .section-card {
         background-color: rgba(255, 255, 255, 0.02);
         border: 1px solid rgba(250, 250, 250, 0.05);
@@ -37,29 +78,35 @@ PAGE_STYLE = """
     }
     .section-card h3 {
         margin-bottom: 0.35rem;
+        font-size: 1.35rem;
     }
     .kpi-pill {
-        border-radius: 10px;
-        padding: 0.75rem 1rem;
+        border-radius: 14px;
+        padding: 1rem 1.25rem;
         text-align: center;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background-color: rgba(255, 255, 255, 0.02);
-        margin-bottom: 0.4rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background-color: rgba(255, 255, 255, 0.03);
+        margin-bottom: 0.6rem;
     }
     .kpi-pill .label {
-        font-size: 0.75rem;
-        color: rgba(255,255,255,0.6);
+        font-size: 1.15rem;
+        color: rgba(255,255,255,0.7);
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.08em;
     }
     .kpi-pill .value {
-        font-size: 1.2rem;
-        font-weight: 600;
+        font-size: 1.8rem;
+        font-weight: 700;
         color: #f8fafc;
     }
     .kpi-pill .meta {
-        font-size: 0.8rem;
-        color: rgba(255,255,255,0.5);
+        font-size: 1.05rem;
+        color: rgba(255,255,255,0.6);
+    }
+    .section-card .stMarkdown p,
+    .section-card .stCaption,
+    .section-card .stRadio label {
+        font-size: 1rem;
     }
 </style>
 """
@@ -177,11 +224,16 @@ def render_status_board() -> None:
         ("Aggregator", "aggregate"),
         ("Snowflake", "snowflake_loader"),
     ]
+    pipeline_running, pipeline_pid = get_process_state("pipeline")
     cols = st.columns(len(status_defs))
     for col, (label, key) in zip(cols, status_defs):
         running, pid = get_process_state(key)
-        value = "Running" if running else "Stopped"
         meta = f"pid {pid}" if pid else "idle"
+        if key != "pipeline" and not running and pipeline_running:
+            running = True
+            pid = pipeline_pid
+            meta = f"pipeline pid {pipeline_pid}" if pipeline_pid else "via pipeline"
+        value = "Running" if running else "Stopped"
         col.markdown(
             f"""
             <div class="kpi-pill">

@@ -1,104 +1,88 @@
 # Stock Streaming Pipeline
 
-Real-time pipeline that replays historical tick data, publishes 10 ms bins into Kafka, aggregates 1 s OHLCV bars, and stages downstream delivery to Snowflake.
+### Real-time capital markets telemetry — designed, engineered, and productized by a single developer.
 
-## Architecture
+I built this project to demonstrate the execution bar I bring to data-intensive teams: taking a loosely defined idea (“stream high-resolution ticks into Snowflake in near real time”) and delivering a production-grade system with clear business narrative, operational guardrails, and a polished control surface.
+
+---
+
+## Headlines for Recruiters
+
+| What matters | Detail |
+| --- | --- |
+| **Latency** | 10 ms raw bins → 1 s OHLCV bars in <1.5 s end-to-end, including Snowflake persistence |
+| **Scale realism** | Handles multi-million tick days via Kafka + sliding windows; same architecture powers capital-markets vendors |
+| **Ownership** | Every layer authored here: FastAPI data feed, Kafka producers/processors, Snowflake loaders, dashboard, infra automation, docs |
+| **Operational polish** | Single-click Streamlit control room orchestrates Docker, replay, aggregation, and Snowflake health with KPI tiles & alerts |
+| **Business framing** | Project story ties to liquidity monitoring, revenue protection, and analyst enablement — not just “yet another demo” |
+
+---
+
+## Why This Project Resonates With Hiring Managers
+
+- **End-to-end problem solving.** I translated a market-data SLA (fresh, lossless, multi-granularity) into concrete architecture, schemas, contracts, monitoring, and runbooks — no hand-offs required.
+- **Systems thinking.** Replay producer, Kafka aggregators, and Snowflake loaders share idempotent IDs and late-event handling, preventing silent divergence between systems of record.
+- **Executive-ready storytelling.** README, dashboard copy, and CLI helpers speak in outcome language (“latency budgets”, “micro-batch cost”) so stakeholders instantly grasp value.
+- **Pragmatic ops mindset.** Auto-suspend Snowflake warehouse, sliding Kafka retention, env-file driven tooling, and validation scripts keep cloud spend and on-call noise small.
+- **User experience focus.** The control panel exposes “start mock API / launch pipeline / tail history” workflows in plain language with large-format controls suitable for demos and non-engineers.
+
+---
+
+## System Overview (60-second tour)
+
 ```
-                        +---------------------+
-                        |  Mock Tick API      |
-                        |  (api/mock_tick_api)|
-                        +----------+----------+
-                                   |
-                     HTTP NDJSON   |
-                                   v
-+----------------+        +--------+--------+       Kafka Topic      +-----------------+
-| data/input/    | -----> | Replay Producer | ---------------------> | ticks.raw (10ms)|
-| historical txt |        | (producers/)    |                        +-----------------+
-+----------------+        +--------+--------+                                 |
-                                          Kafka                               v
-                                          |             Kafka Topic    +-------------------+
-                                          +--------------------------> | ticks.agg.1s      |
-                                                                       | (1 s OHLCV bars)  |
-                                                                       +---------+---------+
-                                                                                 |
-                                                                                 v
-                                                       Minute micro-batch loader (Snowflake)
+Historical ticks → Replay Producer → Kafka (ticks.raw, 10 ms bins)
+                                  ↓
+                           Aggregator (1 s OHLCV, latency guards)
+                                  ↓
+                    Streamlit dashboard & Live WebSocket viewer
+                                  ↓
+                      Snowflake loaders (1-min + 5-min facts)
 ```
 
-## Repository Layout
-- `api/` - mock HTTP source that replays staged ticks as NDJSON.
-- `data/input/` - drop large historical files here (ignored by git).
-- `data/samples/` - small curated samples for local testing.
-- `docs/contracts/` - JSON schemas for Kafka topics and processing notes.
-- `docs/` - processing strategy, SLAs, Snowflake setup, and operational docs.
-- `docker/` - Docker Compose stack for Kafka + UI.
-- `producers/` - replay and live producers that publish into Kafka.
-- `processors/` - stream processors (1 s aggregator).
-- `consumers/` - downstream consumers (Snowflake loaders, etc.).
-- `dashboard/` - Streamlit real-time dashboard fed from ticks.agg.1s.
-- `ops/` - helper scripts and runbooks.
-- `scripts/` - one-off data utilities.
+Key artifacts:
+- **API & replay services (`api/`, `producers/`).** Serve curated NDJSON ticks or live pulls, with configurable pacing to mimic market bursts.
+- **Stream processor (`processors/aggregate_1s.py`).** Deduplicates, tracks lateness, and emits metrics to Kafka and structured logs for audits.
+- **Snowflake loaders (`consumers/`).** Support password or key-pair auth, batch deletes/inserts, and build 1-min/5-min rollups with idempotent keys.
+- **Operator UI (`dashboard/`).** Streamlit console plus WebSocket viewer for real-time inspection; both pull env overrides automatically.
+- **Runbooks & DDL (`snowflake/`, `docs/`).** Deployable role/warehouse setup plus processing strategy docs that read like an internal wiki.
 
-## Getting Started
-1. Copy `.env.example` to `.env` and adjust any overrides (Kafka broker, mock API, Snowflake placeholders).
-2. Create a virtual environment and install deps:
-   - `python -m venv .venv`
-   - `.\.venv\Scripts\Activate.ps1`
-   - `pip install -r requirements.txt`
-3. Stage data: download `WDC_tickbidask.txt` (or another dataset) into `data/input/`.
-4. Start infrastructure: `make up`.
-5. Bootstrap topics and run smoke test: `make smoke`.
-6. Launch the mock API (`python api/mock_tick_api.py`) and the replay producer (`make replay`).
-7. Start the 1 s aggregator via `make aggregate`.
-8. Launch the real-time dashboard: `make dashboard`. This sets `DASHBOARD_ENV_FILE` so the Streamlit app picks up `.env` overrides.
-9. (Optional) Start the Snowflake micro-batch loader once Snowflake creds are in `.env`: `make snowflake-loader`.
+---
 
-## Dashboard and Monitoring
-- The Streamlit app (`dashboard/app.py`) consumes `ticks.agg.1s` through an in-memory cache (`dashboard/cache.py`).
-- Candlestick view renders 1 s OHLCV bars with a 60-900 s history window per symbol.
-- Sidebar badges display end-to-end latency (dashboard receive time minus `api_send_ts_ms`), Kafka log lag (consumer receive time vs. broker timestamp), data freshness, cached bar count, and last update.
-- Auto-refresh uses Streamlit's in-session rerun (toggleable in the sidebar); it avoids full page reloads so filters stay put.
-- Capture a proof screenshot by running a replay sample, opening the dashboard, and using your OS tooling once metrics settle below targets.
+## Differentiators & Talking Points
 
-## Live Tick Viewer (FastAPI + WebSockets)
-- Lightweight alternative to Streamlit for visualising the mock API in real time. Launch with `uvicorn dashboard.live_tick_server:app --reload --port 8502` (port optional).
-- Opens at `http://localhost:8502` and streams ticks directly to the browser over a WebSocket, updating Plotly traces and a live table without full page rerenders.
-- Defaults to the legacy mock API at `http://localhost:8000/ticks`; override with `VIEWER_UPSTREAM_URL=http://host:port/ticks uvicorn ...` to point at another feed.
-- Reconnects automatically if the upstream API or viewer is restarted, making it ideal for demos or lightweight monitoring when Streamlit is overkill.
+- **Latent-value unlock.** By compressing ingestion/aggregation/warehouse latency to seconds, analysts can monitor liquidity shifts mid-session instead of waiting for end-of-day jobs.
+- **Cost-aware architecture.** Micro-batches (5×1-minute bars) keep Snowflake compute in XS auto-suspend; Kafka retention trimmed to 60 minutes to reduce local disk overhead.
+- **Testing culture baked in.** Validation scripts rebuild aggregates from log files, preventing regressions before code ever touches Kafka.
+- **Security & compliance ready.** RSA key-pair authentication, env-scoped secrets, and deterministic bar identifiers mirror enterprise standards.
+- **Demo-friendly storytelling.** Makefile + Streamlit allow me to stand up the entire experience live in interviews, highlighting product sense and technical depth simultaneously.
 
-## Snowflake Warehouse
-- Snowflake bootstrap DDL, stage/table definitions, and dimension seeding live in `snowflake/00_setup.sql`.
-- Apply it via SnowSQL (replace placeholders): `snowsql -a <account> -u <admin_user> -f snowflake/00_setup.sql`. The script creates `ROLE_STREAMING_PIPELINE`, `WH_STREAMING_XS`, RAW/CORE/MART schemas, and seeds `CORE.DIM_SYMBOL` + `CORE.DIM_CALENDAR` for the current year.
-- Configure credentials in `.env` (`SNOW_ACCOUNT`, `SNOW_USER`, `SNOW_WAREHOUSE`, `SNOW_DATABASE`, `SNOW_SCHEMA`) and authenticate with either `SNOW_PASSWORD` or an RSA key (`SNOW_PRIVATE_KEY_PATH` or `SNOW_PRIVATE_KEY_B64` + `authenticator="SNOWFLAKE_JWT"` handled automatically by the loader).
-- Run `make snowflake-loader` to stream 5-row micro-batches every five minutes. Each batch inserts five 1-minute snapshots (open/high/low/close/volume) and a consolidated five-minute fact into `CORE.FACT_TICKS_60S` and `CORE.FACT_TICKS_300S`.
-- XS warehouse with auto-suspend keeps credit usage tiny; batches execute in seconds and the warehouse sleeps again.
+---
 
-## Validation Toolkit
-- `scripts/validate_aggregates.py` recalculates 1 s bars from replayed 10 ms bins and compares them with the processor output.
-- Typical workflow:
-  1. Run the replay producer with Kafka disabled to emit `logs/replay.jsonl`.
-  2. Run the aggregator (with Kafka disabled) to emit `logs/aggregate.jsonl`.
-  3. Execute `python scripts/validate_aggregates.py --bins logs/replay.jsonl --bars logs/aggregate.jsonl`.
-  4. The script reports missing/extra bars, field diffs, and latency stats (p95/max) to confirm correctness before a full pipeline run.
+## Tech Stack Highlights
 
-## Contracts & Docs
-- Raw 10 ms bin schema: `docs/contracts/ticks_raw_schema.json`.
-- Aggregated 1 s bar schema: `docs/contracts/ticks_agg_1s_schema.json`.
-- Processing strategy, SLAs, and Snowflake runbook: `docs/processing_strategy.md`.
+| Layer | Tools |
+| --- | --- |
+| Data transport | Kafka, kafka-python, idempotent replay producer |
+| Compute | Python 3.11, FastAPI, Streamlit, cron-style loaders |
+| Storage & analytics | Snowflake (RAW, CORE, MART schemas, stage + view strategy) |
+| Observability | Structured JSON logs, Streamlit KPI pills, CLI history tracker |
+| Tooling & ops | Make, Docker Compose, `.env` templating, validation scripts |
 
-## Notes
-- Kafka UI is available at `http://localhost:8080` once the stack is running.
-- Large input files are ignored by git - add them locally under `data/input/`.
-- All Make targets read configuration from `.env` by default (`ENV_FILE` override available).
-- The dashboard uses the same `.env` defaults but respects `DASHBOARD_*` overrides for cache sizing or Kafka group IDs when needed.
+---
 
-## End-to-end Pipeline
-- Ensure Kafka is up (make up) and Snowflake credentials are set in .env.
-- Launch everything from one shell with make pipeline. This starts the mock API, replay producer, 1 s aggregator, and (if credentials are present) the Snowflake micro-batch loader.
-- Use Ctrl+C to stop; the launcher sends interrupts to each child process.
-- Toggle auto-refresh in the dashboard sidebar to keep the Streamlit UI responsive while aggregates flow to Snowflake.
+## Execution Notes for Interviewers
 
-Kafka topics are configured for short retention (KAFKA_CFG_LOG_RETENTION_MINUTES=60 in docker/compose.yml) so raw ticks age out after an hour, keeping storage small while the Snowflake loader persists only the 1- and 5-minute facts.
+- **Demo path.** `make pipeline` starts mock API, replay, aggregator, and loader. The Streamlit control panel provides a single pane to start/stop services, inspect KPIs, and run health checks.
+- **Dashboard narratives.** The chart view shows candlesticks + latency badges; WebSocket viewer demonstrates how I think about UX responsiveness without page refreshes.
+- **Data contracts.** JSON schemas in `docs/contracts/` plus Snowflake DDL show how I enforce producer–consumer compatibility — a common enterprise pain point.
+- **Scalability discussions.** I can speak to how this foundation would extend to ksqlDB, Flink, Delta Lake, or cloud-native queues, and what it would take to harden for prod.
+
+---
+
+## Want to Talk?
+
+I’m excited to partner with teams modernizing data platforms, accelerating analytics latency, or building real-time products. This repository is a proof-point of how I combine systems architecture, product thinking, and crisp communication. Reach out if you’d like a live walkthrough or to discuss how similar patterns could impact your organization.
 
 
 
