@@ -6,7 +6,7 @@ I built this project to demonstrate the execution bar I bring to data-intensive 
 
 ---
 
-## Headlines for Recruiters
+## Headlines
 
 | What matters | Detail |
 | --- | --- |
@@ -18,7 +18,7 @@ I built this project to demonstrate the execution bar I bring to data-intensive 
 
 ---
 
-## Why This Project Resonates With Hiring Managers
+## Why This Project Resonates
 
 - **End-to-end problem solving.** I translated a market-data SLA (fresh, lossless, multi-granularity) into concrete architecture, schemas, contracts, monitoring, and runbooks — no hand-offs required.
 - **Systems thinking.** Replay producer, Kafka aggregators, and Snowflake loaders share idempotent IDs and late-event handling, preventing silent divergence between systems of record.
